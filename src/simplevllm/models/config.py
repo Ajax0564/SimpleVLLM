@@ -2,7 +2,7 @@ import torch
 
 CHOOSE_MODEL = "0.6B"
 
-QWEN3_CONFIG = {
+Qwen3Config = {
     "max_batch_size":8,
     "block_size":256,
     "vocab_size": 151_936,           # Vocabulary size

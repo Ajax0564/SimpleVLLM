@@ -5,7 +5,7 @@ from collections import deque
 import itertools
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 from .utils import load_model_weights, load_weights_into_qwen
-from .config import Qwen3Config
+from .config import  Qwen3Config
 
 class RMSNorm(nn.Module):
     def __init__(self, emb_dim, eps=1e-6, bias=False):

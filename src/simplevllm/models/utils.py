@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 from safetensors.torch import load_file
-from .config import CHOOSE_MODEL, QWEN3_CONFIG
+from .config import CHOOSE_MODEL, Qwen3Config
 from huggingface_hub import hf_hub_download, snapshot_download
 
 repo_id = f"Qwen/Qwen3-{CHOOSE_MODEL}"

@@ -1,7 +1,6 @@
+import torch
 from torch import nn
 from collections import deque
-import torch
-
 
 class PagedKVManager(nn.Module):
     def __init__(self, cfg, max_blocks, device):
@@ -15,8 +14,22 @@ class PagedKVManager(nn.Module):
         self.block_ref_counts = {}   
         
         shape = (max_blocks, self.block_size, cfg["n_kv_groups"], cfg["head_dim"])
-        self.k_cache = nn.ParameterList([nn.Parameter(torch.zeros(shape, device=device, dtype=cfg["dtype"]), requires_grad=False) for _ in range(cfg["n_layers"])])
-        self.v_cache = nn.ParameterList([nn.Parameter(torch.zeros(shape, device=device, dtype=cfg["dtype"]), requires_grad=False) for _ in range(cfg["n_layers"])])
+        self._k_cache_names = tuple(f"_k_cache_{i}" for i in range(cfg["n_layers"]))
+        self._v_cache_names = tuple(f"_v_cache_{i}" for i in range(cfg["n_layers"]))
+
+        for name in self._k_cache_names + self._v_cache_names:
+            self.register_buffer(
+                name,
+                torch.empty(shape, device=device, dtype=cfg["dtype"]),
+                persistent=False,
+            )
+    @property
+    def k_cache(self):
+        return [getattr(self, name) for name in self._k_cache_names]
+
+    @property
+    def v_cache(self):
+        return [getattr(self, name) for name in self._v_cache_names]
 
     def get_prefix_blocks(self, token_ids):
         matched_blocks = []
@@ -74,11 +87,28 @@ class PagedKVManager(nn.Module):
         self.free_blocks.append(evict_id)
 
     def free(self, state):
+        if getattr(state, "_freed", False):
+            return
+
+        state._freed = True
         for i in range(state.block_count):
             b_id = int(state.block_table[i])
+            if b_id not in self.block_ref_counts:
+                continue
+
             self.block_ref_counts[b_id] -= 1
-            if self.block_ref_counts[b_id] == 0:
+            if self.block_ref_counts[b_id] <= 0:
+                del self.block_ref_counts[b_id]
                 if b_id in self.block_id_to_hash:
-                    self.evictable_blocks.append(b_id)
+                    if b_id not in self.evictable_blocks:
+                        self.evictable_blocks.append(b_id)
                 else:
                     self.free_blocks.append(b_id)
+
+    def stats(self):
+        return {
+            "free_blocks": len(self.free_blocks),
+            "evictable_blocks": len(self.evictable_blocks),
+            "used_blocks": len(self.block_ref_counts),
+            "cached_prefixes": len(self.hash_to_block_id),
+        }

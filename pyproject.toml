@@ -11,8 +11,9 @@ dependencies = [
     "huggingface-hub>=1.31.0",
     "safetensors>=0.8.0",
     "tokenizers>=0.23.2",
-    "torch>=2.14.0",
+    "torch>=2.9.0",
     "transformers",
+    "flash-attn",
 ]
 
 [project.scripts]

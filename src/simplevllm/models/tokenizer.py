@@ -75,7 +75,7 @@ class Qwen3Tokenizer:
         return s
 
 
-def get_tokenizer():
+def get_qwen3_tokenizer():
     tokenizer_file_path = f"Qwen3-{CHOOSE_MODEL}/tokenizer.json"
     repo_id = f"Qwen/Qwen3-{CHOOSE_MODEL}"
     local_dir = Path(repo_id).parts[-1]

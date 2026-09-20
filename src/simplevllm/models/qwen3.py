@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from collections import deque
 import itertools
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+from .utils import load_model_weights, load_weights_into_qwen
+from .configs import Qwen3Config
 
 class RMSNorm(nn.Module):
     def __init__(self, emb_dim, eps=1e-6, bias=False):
@@ -126,3 +128,10 @@ class Qwen3Model(nn.Module):
         for i, block in enumerate(self.trf_blocks):
             x = block(x, k_caches[i], v_caches[i], metadata)
         return self.out_head(self.final_norm(x))
+
+
+def get_qwen3_model():
+    model = Qwen3Model(Qwen3Config)
+    weights_dict = load_model_weights(Qwen3Config)
+    load_weights_into_qwen(model, Qwen3Config, weights_dict)
+    return model

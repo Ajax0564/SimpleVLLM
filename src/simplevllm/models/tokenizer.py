@@ -13,9 +13,9 @@ class Qwen3Tokenizer:
         "<|quad_start|>", "<|quad_end|>",
         "<|vision_start|>", "<|vision_end|>",
         "<|vision_pad|>", "<|image_pad|>", "<|video_pad|>",
-        "", ""
+        "<think>", "</think>"
     ]
-    _SPLIT_RE = re.compile(r"(<\|[^>]+?\|>||)")
+    _SPLIT_RE = re.compile(r"(<\|[^>]+?\|>|<think>|</think>)")
 
     def __init__(self, tokenizer_file_path="tokenizer.json", repo_id=None,
                  apply_chat_template=True, add_generation_prompt=False, add_thinking=False):
@@ -71,7 +71,7 @@ class Qwen3Tokenizer:
             if self.add_thinking:
                 s += "\n"
             else:
-                s += "\n\n\n\n\n"
+                s += "\n<think>\n\n</think>\n\n"
         return s
 
 

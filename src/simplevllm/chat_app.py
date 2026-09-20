@@ -214,15 +214,19 @@ def create_app(existing_runtime: ChatRuntime | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Model is still loading")
 
         def events():
-            # Prime notebook/proxy transports so small token chunks are not buffered.
+            def frame(event: dict) -> str:
+                # Colab's proxy buffers small chunks, so pad every frame.
+                payload = f"data: {json.dumps(event)}\n\n"
+                return payload + ":" + (" " * 2048) + "\n\n"
+
             yield ": stream-start" + (" " * 2048) + "\n\n"
             try:
                 for event in application_runtime.stream_chat(request):
-                    yield f"data: {json.dumps(event)}\n\n"
+                    yield frame(event)
             except ValueError as error:
-                yield f"data: {json.dumps({'type': 'error', 'detail': str(error)})}\n\n"
+                yield frame({"type": "error", "detail": str(error)})
             except Exception as error:
-                yield f"data: {json.dumps({'type': 'error', 'detail': str(error)})}\n\n"
+                yield frame({"type": "error", "detail": str(error)})
 
         return StreamingResponse(
             events(),

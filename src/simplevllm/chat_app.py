@@ -214,6 +214,8 @@ def create_app(existing_runtime: ChatRuntime | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="Model is still loading")
 
         def events():
+            # Prime notebook/proxy transports so small token chunks are not buffered.
+            yield ": stream-start" + (" " * 2048) + "\n\n"
             try:
                 for event in application_runtime.stream_chat(request):
                     yield f"data: {json.dumps(event)}\n\n"
@@ -222,7 +224,15 @@ def create_app(existing_runtime: ChatRuntime | None = None) -> FastAPI:
             except Exception as error:
                 yield f"data: {json.dumps({'type': 'error', 'detail': str(error)})}\n\n"
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @application.delete("/api/chat/{conversation_id}", status_code=204)
     def clear_chat(conversation_id: str) -> None:

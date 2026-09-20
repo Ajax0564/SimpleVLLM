@@ -153,6 +153,32 @@ class ContinuousBatchEngineNaive:
 
         return finished
 
+    def step_single(self):
+        """Run one engine step and yield newly generated token events."""
+        previous_lengths = {
+            sid: state.num_tokens for sid, state in self.active.items()
+        }
+        finished = self.step()
+
+        for sid, state in self.active.items():
+            start = previous_lengths.get(sid, state.num_tokens)
+            for token_id in state.tokens[start:state.num_tokens].tolist():
+                yield {
+                    "sequence_id": sid,
+                    "token_id": token_id,
+                    "finished": False,
+                }
+
+        for sid, tokens in finished.items():
+            start = previous_lengths.get(sid, len(tokens))
+            for token_id in tokens[start:]:
+                yield {
+                    "sequence_id": sid,
+                    "token_id": token_id,
+                    "finished": True,
+                    "tokens": tokens,
+                }
+
 
 class ContinuousBatchEngine(ContinuousBatchEngineNaive):
     """ContinuousBatchEngine with reusable GPU staging buffers."""

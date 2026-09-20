@@ -132,6 +132,6 @@ class Qwen3Model(nn.Module):
 
 def get_qwen3_model():
     model = Qwen3Model(Qwen3Config)
-    weights_dict = load_model_weights(Qwen3Config)
+    weights_dict = load_model_weights()
     load_weights_into_qwen(model, Qwen3Config, weights_dict)
     return model

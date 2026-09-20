@@ -1,4 +1,5 @@
 import torch
+
 class SequenceState:
     def __init__(self, sid, prompt_ids, max_gen_len, cfg, device, matched_blocks=None):
         if not prompt_ids:

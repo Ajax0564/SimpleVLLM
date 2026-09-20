@@ -153,6 +153,7 @@ class ContinuousBatchEngineNaive:
 
         return finished
 
+
 class ContinuousBatchEngine(ContinuousBatchEngineNaive):
     """ContinuousBatchEngine with reusable GPU staging buffers."""
 

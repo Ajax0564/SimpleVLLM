@@ -14,11 +14,17 @@ dependencies = [
     "torch>=2.9.0",
     "transformers",
     "flash-attn",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.scripts]
 simplevllm = "simplevllm:main"
+simplevllm-chat = "simplevllm.chat_app:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.extra-build-dependencies]
+flash-attn = ["torch"]

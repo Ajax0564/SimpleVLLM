@@ -150,7 +150,13 @@ def create_app(existing_runtime: ChatRuntime | None = None) -> FastAPI:
         }
         const streamInit = {...init, body: init.body};
         const response = await originalFetch('/api/chat/stream', streamInit);
-        if (!response.ok || !response.body) return response;
+        if (!response.ok || !response.body) {
+            const detail = await response.text();
+            return new Response(JSON.stringify({detail: detail || `HTTP ${response.status}`}), {
+                status: response.status,
+                headers: {'Content-Type': 'application/json'}
+            });
+        }
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -170,7 +176,12 @@ def create_app(existing_runtime: ChatRuntime | None = None) -> FastAPI:
         };
         const process = (line) => {
             if (!line.startsWith('data: ')) return;
-            const event = JSON.parse(line.slice(6));
+            let event;
+            try {
+                event = JSON.parse(line.slice(6));
+            } catch (error) {
+                throw new Error(`Invalid stream event: ${line.slice(6)}`);
+            }
             if (event.type === 'token') {
                 content().textContent += event.text;
                 window.scrollTo(0, document.body.scrollHeight);

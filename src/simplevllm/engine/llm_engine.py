@@ -3,7 +3,9 @@ from collections import deque
 import torch
 from .sequence import SequenceState
 
-class ContinuousBatchEngineNaive:
+class ContinuousBatchEngine:
+    """ContinuousBatchEngine with reusable GPU staging buffers (Standalone)."""
+
     def __init__(self, model, kv_mgr, cfg):
         self.model = model
         self.model.eval()
@@ -12,180 +14,12 @@ class ContinuousBatchEngineNaive:
         self.active = {}
         self.id_gen = itertools.count()
         self.device = next(model.parameters()).device
-        
+
         self.max_batch = cfg.get("max_batch_size", 4)
-        self.chunk_size = cfg.get("chunk_size", 256) 
+        self.chunk_size = cfg.get("chunk_size", 256)
         self.waiting_room = deque()
 
-
-    def add_sequence(self, prompt_ids, max_gen_len=128):
-        if not prompt_ids:
-            raise ValueError("prompt_ids cannot be empty")
-
-        max_length = self.cfg["context_length"]
-        if len(prompt_ids) + max_gen_len > max_length:
-            raise ValueError(
-                f"Prompt plus generation length exceeds context length {max_length}"
-            )
-
-        sid = next(self.id_gen)
-        self.waiting_room.append({
-            "sid": sid,
-            "prompt_ids": list(prompt_ids),
-            "max_gen_len": max_gen_len,
-        })
-
-    def reset(self):
-        for state in list(self.active.values()):
-            self.kv_mgr.free(state)
-
-        self.active.clear()
-        self.waiting_room.clear()
-        self.id_gen = itertools.count()
-
-    def stats(self):
-        return {
-            "active_sequences": len(self.active),
-            "waiting_sequences": len(self.waiting_room),
-            "kv_cache": self.kv_mgr.stats(),
-        }
-
-    def _try_schedule_waiting(self):
-        while self.waiting_room and len(self.active) < self.max_batch:
-            req = self.waiting_room[0]
-            matched_blocks = self.kv_mgr.get_prefix_blocks(req['prompt_ids'])
-            
-            self.waiting_room.popleft()
-            self.active[req['sid']] = SequenceState(
-                req['sid'], req['prompt_ids'], req['max_gen_len'],
-                self.cfg, self.device, matched_blocks=matched_blocks
-            )
-
-    def step(self):
-        self._try_schedule_waiting()
-        if not self.active:
-            return {}
-
-        states = list(self.active.values())
-        chunks = [
-            min(self.chunk_size, s.prompt_len - s.processed_len)
-            if s.is_prefill else 1
-            for s in states
-        ]
-        starts = [s.processed_len for s in states]
-        is_decoding = all(not s.is_prefill for s in states)
-
-        for s, chunk_len in zip(states, chunks):
-            self.kv_mgr.allocate(s, chunk_len)
-            s.update_metadata(chunk_len)
-
-        ids_to_cat, pos_to_cat, slots_to_cat = [], [], []
-        cu_q, cu_k, seqlens = [0], [0], []
-        q_acc, k_acc = 0, 0
-
-        for s, start, chunk_len in zip(states, starts, chunks):
-            end = start + chunk_len
-            ids_to_cat.append(s.tokens[start:end].to(self.device))
-            pos_to_cat.append(torch.arange(start, end, device=self.device))
-            slots_to_cat.append(s.slot_mapping[start:end].to(self.device))
-
-            q_acc += chunk_len
-            k_acc += end
-            cu_q.append(q_acc)
-            cu_k.append(k_acc)
-            seqlens.append(end)
-
-        block_size = self.cfg["block_size"]
-        max_num_blocks_per_seq = (max(seqlens) + block_size - 1) // block_size
-        block_table = torch.zeros(
-            (len(states), max_num_blocks_per_seq),
-            dtype=torch.int32,
-            device=self.device,
-        )
-        for row, state in enumerate(states):
-            if state.block_count > 0:
-                copy_count = min(state.block_count, max_num_blocks_per_seq)
-                block_table[row, :copy_count] = state.block_table[:copy_count].to(
-                    device=self.device,
-                    dtype=torch.int32,
-                )
-
-        token_positions = torch.cat(pos_to_cat, dim=0)
-        meta = {
-            "is_decoding": is_decoding,
-            "slot_mapping": torch.cat(slots_to_cat, dim=0),
-            "cu_seqlens_q": torch.tensor(cu_q, dtype=torch.int32, device=self.device),
-            "cu_seqlens_k": torch.tensor(cu_k, dtype=torch.int32, device=self.device),
-            "max_seqlen_q": max(chunks),
-            "max_seqlen_k": max(seqlens),
-            "seqlens": torch.tensor(seqlens, dtype=torch.int32, device=self.device),
-            "block_table": block_table,
-            "block_size": block_size,
-            "cos": self.model.cos_buf[token_positions].unsqueeze(1),
-            "sin": self.model.sin_buf[token_positions].unsqueeze(1),
-        }
-
-        with torch.no_grad():
-            logits = self.model(
-                torch.cat(ids_to_cat, dim=0),
-                self.kv_mgr.k_cache,
-                self.kv_mgr.v_cache,
-                meta,
-            )
-
-        finished = {}
-        curr_offset = 0
-        next_tokens = torch.argmax(logits, dim=-1)
-
-        for state, chunk_len in zip(states, chunks):
-            last_idx = curr_offset + chunk_len - 1
-
-            if state.processed_len >= state.prompt_len:
-                token_id = next_tokens[last_idx].item()
-                should_continue = state.append_token(token_id)
-
-                if not should_continue:
-                    finished[state.id] = state.tokens[:state.num_tokens].tolist()
-                    self.kv_mgr.free(state)
-                    del self.active[state.id]
-
-            curr_offset += chunk_len
-
-        return finished
-
-    def step_single(self):
-        """Run one engine step and yield newly generated token events."""
-        previous_lengths = {
-            sid: state.num_tokens for sid, state in self.active.items()
-        }
-        finished = self.step()
-
-        for sid, state in self.active.items():
-            start = previous_lengths.get(sid, state.num_tokens)
-            for token_id in state.tokens[start:state.num_tokens].tolist():
-                yield {
-                    "sequence_id": sid,
-                    "token_id": token_id,
-                    "finished": False,
-                }
-
-        for sid, tokens in finished.items():
-            start = previous_lengths.get(sid, len(tokens))
-            for token_id in tokens[start:]:
-                yield {
-                    "sequence_id": sid,
-                    "token_id": token_id,
-                    "finished": True,
-                    "tokens": tokens,
-                }
-
-
-class ContinuousBatchEngine(ContinuousBatchEngineNaive):
-    """ContinuousBatchEngine with reusable GPU staging buffers."""
-
-    def __init__(self, model, kv_mgr, cfg):
-        super().__init__(model, kv_mgr, cfg)
-
+        
         self.max_tokens_per_step = self.max_batch * self.chunk_size
         self.max_blocks_per_seq = (
             self.cfg["context_length"] + self.cfg["block_size"] - 1
@@ -257,6 +91,55 @@ class ContinuousBatchEngine(ContinuousBatchEngineNaive):
         )
         self.gpu_sin = torch.empty_like(self.gpu_cos)
 
+    def add_sequence(self, prompt_ids, max_gen_len=128):
+        if not prompt_ids:
+            raise ValueError("prompt_ids cannot be empty")
+
+        max_length = self.cfg["context_length"]
+        if len(prompt_ids) + max_gen_len > max_length:
+            raise ValueError(
+                f"Prompt plus generation length exceeds context length {max_length}"
+            )
+
+        sid = next(self.id_gen)
+        self.waiting_room.append({
+            "sid": sid,
+            "prompt_ids": list(prompt_ids),
+            "max_gen_len": max_gen_len,
+        })
+
+    def reset(self):
+        for state in list(self.active.values()):
+            self.kv_mgr.free(state)
+
+        self.active.clear()
+        self.waiting_room.clear()
+        self.id_gen = itertools.count()
+
+        self.gpu_sequence_rows.clear()
+        self.gpu_sequence_block_counts.clear()
+        self.free_gpu_rows = deque(range(self.max_batch))
+        self.gpu_block_table.zero_()
+        self.gpu_sequence_block_table.zero_()
+
+    def stats(self):
+        return {
+            "active_sequences": len(self.active),
+            "waiting_sequences": len(self.waiting_room),
+            "kv_cache": self.kv_mgr.stats(),
+        }
+
+    def _try_schedule_waiting(self):
+        while self.waiting_room and len(self.active) < self.max_batch:
+            req = self.waiting_room[0]
+            matched_blocks = self.kv_mgr.get_prefix_blocks(req['prompt_ids'])
+
+            self.waiting_room.popleft()
+            self.active[req['sid']] = SequenceState(
+                req['sid'], req['prompt_ids'], req['max_gen_len'],
+                self.cfg, self.device, matched_blocks=matched_blocks
+            )
+
     def _get_gpu_sequence_row(self, state):
         if state.id not in self.gpu_sequence_rows:
             if not self.free_gpu_rows:
@@ -273,14 +156,6 @@ class ContinuousBatchEngine(ContinuousBatchEngineNaive):
         if row is not None:
             self.gpu_sequence_block_table[row].zero_()
             self.free_gpu_rows.append(row)
-
-    def reset(self):
-        super().reset()
-        self.gpu_sequence_rows.clear()
-        self.gpu_sequence_block_counts.clear()
-        self.free_gpu_rows = deque(range(self.max_batch))
-        self.gpu_block_table.zero_()
-        self.gpu_sequence_block_table.zero_()
 
     def step(self):
         self._try_schedule_waiting()
@@ -432,3 +307,29 @@ class ContinuousBatchEngine(ContinuousBatchEngineNaive):
                     del self.active[state.id]
 
         return finished
+
+    def step_single(self):
+        """Run one engine step and yield newly generated token events."""
+        previous_lengths = {
+            sid: state.num_tokens for sid, state in self.active.items()
+        }
+        finished = self.step()
+
+        for sid, state in self.active.items():
+            start = previous_lengths.get(sid, state.num_tokens)
+            for token_id in state.tokens[start:state.num_tokens].tolist():
+                yield {
+                    "sequence_id": sid,
+                    "token_id": token_id,
+                    "finished": False,
+                }
+
+        for sid, tokens in finished.items():
+            start = previous_lengths.get(sid, len(tokens))
+            for token_id in tokens[start:]:
+                yield {
+                    "sequence_id": sid,
+                    "token_id": token_id,
+                    "finished": True,
+                    "tokens": tokens,
+                }

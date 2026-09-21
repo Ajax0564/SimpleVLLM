@@ -8,21 +8,14 @@ from .utils import load_model_weights, load_weights_into_qwen
 from .config import  Qwen3Config
 
 class RMSNorm(nn.Module):
-    def __init__(self, emb_dim, eps=1e-6, bias=False):
+    def __init__(self, emb_dim, eps=1e-6, dtype=torch.float32):
         super().__init__()
         self.eps = eps
-        self.scale = nn.Parameter(torch.ones(emb_dim))
-        self.shift = nn.Parameter(torch.zeros(emb_dim)) if bias else None
+        self.scale = nn.Parameter(torch.ones(emb_dim,dtype=dtype))
 
     def forward(self, x):
-        input_dtype = x.dtype
-        x = x.to(torch.float32)
-        variance = x.pow(2).mean(dim=-1, keepdim=True)
-        norm_x = x * torch.rsqrt(variance + self.eps)
-        norm_x = norm_x * self.scale
-        if self.shift is not None:
-            norm_x = norm_x + self.shift
-        return norm_x.to(input_dtype)
+        return F.rms_norm(x, normalized_shape=(x.shape[-1],), weight=self.scale, eps=self.eps)
+        
 
 class FeedForward(nn.Module):
     def __init__(self, cfg):
@@ -52,8 +45,8 @@ class GroupedQueryAttention(nn.Module):
         self.W_value = nn.Linear(cfg["emb_dim"],  self.num_kv_groups * self.head_dim, bias=False, dtype=cfg["dtype"])
         self.out_proj = nn.Linear(self.num_heads * self.head_dim, cfg["emb_dim"], bias=False, dtype=cfg["dtype"])
         
-        self.q_norm = RMSNorm(self.head_dim) if cfg.get("qk_norm") else None
-        self.k_norm = RMSNorm(self.head_dim) if cfg.get("qk_norm") else None
+        self.q_norm = RMSNorm(self.head_dim, dtype=cfg["dtype"]) if cfg.get("qk_norm") else None
+        self.k_norm = RMSNorm(self.head_dim, dtype=cfg["dtype"]) if cfg.get("qk_norm") else None
 
     def forward(self, x, k_cache, v_cache, metadata):
         q = self.W_query(x).view(-1, self.num_heads, self.head_dim)
@@ -66,18 +59,12 @@ class GroupedQueryAttention(nn.Module):
         q = apply_rope(q, metadata['cos'], metadata['sin'])
         k = apply_rope(k, metadata['cos'], metadata['sin'])
 
-        # Manual Paged Cache Update (Works well for compiled inference)
-        slots = metadata['slot_mapping']
-        b_idx = slots // metadata['block_size']
-        o_idx = slots % metadata['block_size']
-        
-        k_cache[b_idx, o_idx] = k
-        v_cache[b_idx, o_idx] = v
-
         if metadata['is_decoding']:
             # Decode Phase
             attn_out = flash_attn_with_kvcache(
                 q.unsqueeze(1), k_cache, v_cache,
+                k=k.unsqueeze(1),
+                v=v.unsqueeze(1),
                 cache_seqlens=metadata['seqlens'],
                 block_table=metadata['block_table'],
                 causal=True
@@ -85,6 +72,13 @@ class GroupedQueryAttention(nn.Module):
         else:
             # Chunked Prefill / Mixed Batch Phase
             # Pass the global k_cache and v_cache along with the block_table
+            # to do: make triton kernel for cache update
+            slots = metadata['slot_mapping']
+            b_idx = slots // metadata['block_size']
+            o_idx = slots % metadata['block_size']
+            
+            k_cache[b_idx, o_idx] = k
+            v_cache[b_idx, o_idx] = v
             attn_out = flash_attn_varlen_func(
                 q, k_cache, v_cache,
                 cu_seqlens_q=metadata['cu_seqlens_q'],
@@ -102,11 +96,11 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.att = GroupedQueryAttention(layer_idx, cfg)
         self.ff = FeedForward(cfg)
-        self.norm1, self.norm2 = RMSNorm(cfg["emb_dim"]), RMSNorm(cfg["emb_dim"])
+        self.norm1, self.norm2 = RMSNorm(cfg["emb_dim"], dtype=cfg["dtype"]), RMSNorm(cfg["emb_dim"], dtype=cfg["dtype"])
 
     def forward(self, x, k_cache, v_cache, metadata):
-        x = x + self.att(self.norm1(x), k_cache, v_cache, metadata)
-        x = x + self.ff(self.norm2(x))
+        x+= self.att(self.norm1(x), k_cache, v_cache, metadata)
+        x+= self.ff(self.norm2(x))
         return x
 
 class Qwen3Model(nn.Module):
@@ -114,7 +108,7 @@ class Qwen3Model(nn.Module):
         super().__init__()
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"])
         self.trf_blocks = nn.ModuleList([TransformerBlock(cfg, i) for i in range(cfg["n_layers"])])
-        self.final_norm = RMSNorm(cfg["emb_dim"])
+        self.final_norm = RMSNorm(cfg["emb_dim"], dtype=cfg["dtype"])
         self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False, dtype=cfg["dtype"])
 
         inv_freq = 1.0 / (cfg["rope_base"] ** (torch.arange(0, cfg["head_dim"], 2).float() / cfg["head_dim"]))

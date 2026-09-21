@@ -9,18 +9,18 @@ This project is not meant to be a drop-in production replacement for full vLLM. 
 - schedule new requests while others are decoding,
 - run batched inference efficiently on GPU.
 
-## Quick local chat app
+## Quick local Gradio chat UI
 
-The repository includes a small in-memory multi-turn browser chat app. Install the project, then start it with:
+Install the project and launch the ChatGPT-style Gradio interface with:
 
 ```bash
 uv sync
-uv run simplevllm-chat
+uv run simplevllm-gradio
 ```
 
-Open `http://127.0.0.1:8000` in a browser. The first startup downloads the Qwen3 model and tokenizer, so it can take a while and requires a compatible CUDA environment for the current FlashAttention dependency.
+The first startup downloads the Qwen3 model and tokenizer, so it can take a while and requires a compatible CUDA environment for the current FlashAttention dependency. To enable model compilation on CUDA, set `SIMPLEVLLM_COMPILE=1` before starting.
 
-To enable model compilation on CUDA, set `SIMPLEVLLM_COMPILE=1` before starting the server. The app is intentionally simple: conversations are held in memory and responses are returned after generation completes.
+The assistant message is updated as each token is generated. Use the `Max new tokens` slider to control the response length, or `New chat` to clear the conversation.
 
 ---
 

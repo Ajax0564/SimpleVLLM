@@ -126,8 +126,8 @@ To manage non-contiguous memory dynamically, the system relies on several core p
 ### Physical KV-Cache Layout
 Instead of allocating a single large contiguous tensor per sequence, the inference engine pre-allocates two monolithic tensors in GPU memory during startup:
 
-$$\text{K\_Cache Shape} = [\text{max\_blocks}, \text{block\_size}, \text{num\_heads}, \text{head\_dim}]$$
-$$\text{V\_Cache Shape} = [\text{max\_blocks}, \text{block\_size}, \text{num\_heads}, \text{head\_dim}]$$
+$$\text{K\\_Cache Shape} = [\text{max\\_blocks}, \text{block\\_size}, \text{num\\_heads}, \text{head\\_dim}]$$
+$$\text{V\\_Cache Shape} = [\text{max\\_blocks}, \text{block\\_size}, \text{num\\_heads}, \text{head\\_dim}]$$
 
 Each **Physical Block** contains $B$ slots. A **Slot** is the physical storage unit required to hold the Key and Value vectors for a single token across all attention heads and dimensions.
 
@@ -150,20 +150,26 @@ Global GPU KV Cache Memory Pool (Example with block_size = 4):
 
 ## Mathematical Indexing Formulas
 
-Given a token at **logical sequence position $t$** (0-indexed) inside Sequence $i$:
+Given a token at logical sequence position $t$ (0-indexed) inside Sequence $i$:
 
-1. **Logical Block Index ($L_{\text{block}}$):**
-   $$L_{\text{block}} = \lfloor \frac{t}{\text{block\_size}} \rfloor$$
+### 1. Logical Block Index ($L_{\text{block}}$)
 
-2. **Offset within Block ($O_{\text{block}}$):**
-   $$O_{\text{block}} = t \pmod{\text{block\_size}}$$
+$$L_{\text{block}} = \left\lfloor \frac{t}{\text{block\\_size}} \right\rfloor$$
 
-3. **Physical Block ID ($P_{\text{block}}$):**
-   Look up in `block_table`:
-   $$P_{\text{block}} = \text{block\_table}[i][L_{\text{block}}]$$
+### 2. Offset within Block ($O_{\text{block}}$)
 
-4. **Global Linear Physical Slot ID ($S_{\text{physical}}$):**
-   $$S_{\text{physical}} = (P_{\text{block}} \times \text{block\_size}) + O_{\text{block}}$$
+$$O_{\text{block}} = t \pmod{\text{block\\_size}}$$
+
+### 3. Physical Block ID ($P_{\text{block}}$)
+
+Look up in `block_table`:
+
+$$P_{\text{block}} = \text{block\\_table}[i][L_{\text{block}}]$$
+
+### 4. Global Linear Physical Slot ID ($S_{\text{physical}}$)
+
+$$S_{\text{physical}} = (P_{\text{block}} \times \text{block\\_size}) + O_{\text{block}}$$
+
 
 ---
 
@@ -261,7 +267,7 @@ Logical Sequence 1 (6 Tokens: T0 ... T5):
 ### Prefill Phase (Prompt Processing)
 * **Goal**: Process input tokens simultaneously for a sequence and populate initial KV cache entries.
 * **Mechanism**:
-  1. The host determines how many blocks are needed: $\lceil \text{prompt\_len} / \text{block\_size} \rceil$.
+  1. The host determines how many blocks are needed: $\lceil \text{prompt\\_len} / \text{block\\_size} \rceil$.
   2. The memory allocator fetches free block IDs from the global pool and updates `block_table`.
   3. `slot_mapping` is constructed for every prompt token.
   4. The Attention kernel receives computed $K$ and $V$ tensors and uses `slot_mapping` to perform a scattered write directly into `K_Cache` and `V_Cache` global memory.
@@ -269,8 +275,8 @@ Logical Sequence 1 (6 Tokens: T0 ... T5):
 ### Decode Phase (Token-by-Token Generation)
 * **Goal**: Append KV vectors for a single newly generated token per sequence.
 * **Mechanism**:
-  1. For sequence $i$, check current token position $t = \text{cache\_seqlens}[i]$.
-  2. Determine if $t \pmod{\text{block\_size}} == 0$:
+  1. For sequence $i$, check current token position $t = \text{cache\\_seqlens}[i]$.
+  2. Determine if $t \pmod{\text{block\\_size}} == 0$:
      * If **True**: The current physical block is full. Allocate a new physical block from the free list and append its ID to `block_table[i]`.
      * If **False**: Use the existing last block in `block_table[i]`.
   3. Compute the single new slot index and append it to `slot_mapping`.

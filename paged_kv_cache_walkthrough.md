@@ -21,14 +21,14 @@ To demonstrate how memory blocks, slot mappings, block tables, and paged KV cach
 ### Core Data Structures & Mathematical Mapping
 
 1. **Physical Cache Tensor (`PagedKVManager.k_cache` / `v_cache`)**
-   Shape: $(\text{max\_blocks}, \text{block\_size}, \text{n\_kv\_groups}, \text{head\_dim}) = (8, 4, 2, 16)$.
+   Shape: $(\text{max\\_blocks}, \text{block\\_size}, \text{n\\_kv\\_groups}, \text{head\\_dim}) = (8, 4, 2, 16)$.
    Each block holds $4$ token slots. The physical slot index in memory is calculated as:
-   $$\text{slot\_mapping}[t] = \text{physical\_block\_id} \times \text{block\_size} + \text{offset}$$
+   $$\text{slot\\_mapping}[t] = \text{physical\\_block\\_id} \times \text{block\\_size} + \text{offset}$$
 
 2. **Block Table (`SequenceState.block_table`)**
    A 1D tensor per sequence mapping a logical sequence block index to a physical memory block index.
-   $$\text{b\_idx} = \lfloor t / \text{block\_size} \rfloor, \quad \text{o\_idx} = t \pmod{\text{block\_size}}$$
-   $$\text{physical\_block\_id} = \text{block\_table}[\text{b\_idx}]$$
+   $$\text{b\\_idx} = \lfloor t / \text{block\\_size} \rfloor, \quad \text{o\\_idx} = t \pmod{\text{block\\_size}}$$
+   $$\text{physical\\_block\\_id} = \text{block\\_table}[\text{b\\_idx}]$$
 
 3. **Slot Mapping (`SequenceState.slot_mapping`)**
    A 1D tensor mapping each token position $t$ in the sequence to its flattened location inside the global KV cache memory pool.
@@ -110,20 +110,20 @@ In the second invocation of `engine.step()`, both sequences process $1$ single q
 When decoding, `start = s.num_tokens - 1`:
 
 * **`s0` Token 7**:
-  $$\text{b\_idx} = \lfloor 7/4 \rfloor = 1, \quad \text{o\_idx} = 7 \pmod 4 = 3$$
-  $$\text{Physical Block} = \text{s0.block\_table}[1] = 1$$
-  $$\text{slot\_mapping}[7] = 1 \times 4 + 3 = \mathbf{7}$$
+  $$\text{b\\_idx} = \lfloor 7/4 \rfloor = 1, \quad \text{o\\_idx} = 7 \pmod 4 = 3$$
+  $$\text{Physical Block} = \text{s0.block\\_table}[1] = 1$$
+  $$\text{slot\\_mapping}[7] = 1 \times 4 + 3 = \mathbf{7}$$
 
 * **`s1` Token 3**:
-  $$\text{b\_idx} = \lfloor 3/4 \rfloor = 0, \quad \text{o\_idx} = 3 \pmod 4 = 3$$
-  $$\text{Physical Block} = \text{s1.block\_table}[0] = 2$$
-  $$\text{slot\_mapping}[3] = 2 \times 4 + 3 = \mathbf{11}$$
+  $$\text{b\\_idx} = \lfloor 3/4 \rfloor = 0, \quad \text{o\\_idx} = 3 \pmod 4 = 3$$
+  $$\text{Physical Block} = \text{s1.block\\_table}[0] = 2$$
+  $$\text{slot\\_mapping}[3] = 2 \times 4 + 3 = \mathbf{11}$$
 
 #### 2. Inference Metadata (`_prepare_inference_data`)
 * **`input_ids`**: `[108, 204]` (Shape: $2$).
 * **`slot_mapping`**: `[7, 11]`.
 * **`seqlens`**: `[8, 4]` (Total context length of each sequence).
-* **`block_table`**: Stacked 2D tensor of shape $(2, \text{max\_blocks})$:
+* **`block_table`**: Stacked 2D tensor of shape $(2, \text{max\\_blocks})$:
   $$\begin{bmatrix} 0 & 1 & 0 & 0 & 0 & 0 & 0 & 0 \\ 2 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \end{bmatrix}$$
 * **`is_decoding`**: `True`.
 
@@ -167,14 +167,14 @@ In the third invocation of `engine.step()`, both sequences exceed their currentl
 
 #### Slot Calculation for Boundary Tokens
 * **`s0` Token 8**:
-  $$\text{b\_idx} = \lfloor 8/4 \rfloor = 2, \quad \text{o\_idx} = 8 \pmod 4 = 0$$
-  $$\text{Physical Block} = \text{s0.block\_table}[2] = 3$$
-  $$\text{slot\_mapping}[8] = 3 \times 4 + 0 = \mathbf{12}$$
+  $$\text{b\\_idx} = \lfloor 8/4 \rfloor = 2, \quad \text{o\\_idx} = 8 \pmod 4 = 0$$
+  $$\text{Physical Block} = \text{s0.block\\_table}[2] = 3$$
+  $$\text{slot\\_mapping}[8] = 3 \times 4 + 0 = \mathbf{12}$$
 
 * **`s1` Token 4**:
-  $$\text{b\_idx} = \lfloor 4/4 \rfloor = 1, \quad \text{o\_idx} = 4 \pmod 4 = 0$$
-  $$\text{Physical Block} = \text{s1.block\_table}[1] = 4$$
-  $$\text{slot\_mapping}[4] = 4 \times 4 + 0 = \mathbf{16}$$
+  $$\text{b\\_idx} = \lfloor 4/4 \rfloor = 1, \quad \text{o\\_idx} = 4 \pmod 4 = 0$$
+  $$\text{Physical Block} = \text{s1.block\\_table}[1] = 4$$
+  $$\text{slot\\_mapping}[4] = 4 \times 4 + 0 = \mathbf{16}$$
 
 ---
 
